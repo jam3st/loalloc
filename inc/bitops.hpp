@@ -3,7 +3,6 @@
 #include "types.hpp"
 
 namespace Gx {
-	constexpr size_t bitsPerByte = 8u;
 	namespace Bitops {
 		inline size_t firstBitSet(uint32_t val)
 		{

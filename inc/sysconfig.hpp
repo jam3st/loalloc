@@ -14,16 +14,22 @@ namespace Gx {
 	struct PadIfNonZero {
 		uint8_t pad[padLen];
 	};
+
 	template<>
-		struct PadIfNonZero<0> {
+	struct PadIfNonZero<0> {
 	};
 
 	template<typename T>
-	using PadToAlignment = PadIfNonZero<(sizeof(T) % defaultAlignmentBytes == 0 ? 0  : defaultAlignmentBytes - sizeof(T) % defaultAlignmentBytes)>;
+	using PadToAlignment = PadIfNonZero<(sizeof(T) % defaultAlignmentBytes == 0 ? 0 : defaultAlignmentBytes - sizeof(T) % defaultAlignmentBytes)>;
 
-	inline size_t alignToBits(size_t const val, size_t const alignmentBits) {
-		return (val + ((1u << alignmentBits) - 1u)) & (~((1u << alignmentBits) - 1u));
+	constexpr inline size_t alignToBits(size_t const val, size_t const alignmentBits) {
+		return (val + (1u << alignmentBits) - 1) & ~((1u << alignmentBits) - 1u);
 	}
 
-//PadIfNonZero<(sizeof(HeapBreak) % cacheLineSize == 0 ? 0  : cacheLineSize - sizeof(HeapBreak) % cacheLineSize)> pad0;
+	constexpr inline size_t roundUpNearestMultiple(size_t const val, size_t const alignment) {
+		return alignment * ((val + alignment - 1u) / alignment);
+	}
+	constexpr inline size_t roundDownNearestMultiple(size_t const val, size_t const alignment) {
+		return alignment * (val / alignment);
+	}
 }
