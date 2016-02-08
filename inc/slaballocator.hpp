@@ -31,7 +31,6 @@ namespace Gx {
 			if(shiftLen == 0) {
 				return;
 			}
-//			if(shiftLen < 0) { __builtin_trap(); }
 			if(shiftLen > 0 && (shiftLen + insertPos) > size) { __builtin_trap(); }
 			if((shiftLen + endPos) > size) { __builtin_trap(); }
 			if(shiftLen > 0) {
@@ -70,6 +69,7 @@ namespace Gx {
 		};
 
 		struct  DecodedBitmapVal {
+			ssize_t pos;
 			size_t len;
 			BitmapVal val;
 		};
@@ -77,9 +77,9 @@ namespace Gx {
 		DecodedBitmapVal reverseDecode(size_t const endPos) const {
 			auto curPos = endPos;
 			if(curPos == 0u) {
-				return DecodedBitmapVal{ .len = 0u };
+				return DecodedBitmapVal{ .pos = 0, .len = 0u };
 			}
-			;
+
 			while(--curPos > 0u) {
 				if((v.get(curPos - 1u) & v.contBitMask) == 0u) {
 					break;
@@ -89,31 +89,29 @@ namespace Gx {
 		}
 
 		DecodedBitmapVal decode(size_t const startPos) const {
-			DecodedBitmapVal currVal{ .len = 0u};
-			currVal.val.val = 0u;
-			currVal.val.allocated = false;
-			size_t currByteBitPos = 0u;
-			auto curPos = startPos;
-			while(curPos < count()) {
-				auto currByte = v.get(curPos++);
-				if(currByteBitPos != 0) {
-					currVal.val.val += (currByte & v.payloadBitMask) << (currByteBitPos);
-					if((currByte & v.contBitMask) == v.contBitMask) {
-						currByteBitPos += v.contBitPos;
-					} else {
-						break;
-					}
-				} else {
-					currVal.val.val = currByte & v.firstPayloadBitMask;
-					currVal.val.allocated = (currByte & v.signBitMask) == v.signBitMask;
-					if((currByte & v.contBitMask) == v.contBitMask) {
-						currByteBitPos = v.signBitPos;
-					} else {
-						break;
-					}
-				}
+			DecodedBitmapVal currVal;
+			if(startPos >= count()) {
+				currVal.len = 0u;
+				currVal.pos = count();
+				currVal.val.allocated = false;
+				currVal.val.val = 0u; // used for additions
+				return currVal;
 			}
-			currVal.len = curPos - startPos;
+			auto curPos = startPos;
+			currVal.pos = curPos;
+			size_t currByte = v.get(curPos++);
+			currVal.len = 1u;
+			currVal.val.val = currByte & v.firstPayloadBitMask;
+			currVal.val.allocated = (currByte & v.signBitMask) == v.signBitMask;
+			size_t currByteBitPos = v.signBitPos;
+			while((currByte & v.contBitMask) != 0u) {
+				if(curPos > count()) { __builtin_trap(); }
+				++currVal.len;
+				currByte = v.get(curPos++);
+				currVal.val.val |= (currByte & v.payloadBitMask) << currByteBitPos;
+				currByteBitPos += v.contBitPos;
+			}
+
 			return currVal;
 		}
 
@@ -213,11 +211,9 @@ namespace Gx {
 		}
 
 		struct Context {
-			DecodedBitmapVal prevVal { .len = 0u };
-			DecodedBitmapVal currVal { .len = 0u };
-			DecodedBitmapVal nextVal { .len = 0u };
-			size_t pos = 0u;
-			bool found = false;
+			DecodedBitmapVal prevVal { .pos = 0u, .len = 0u };
+			DecodedBitmapVal currVal { .pos = 0u, .len = 0u };
+			DecodedBitmapVal nextVal { .pos = 0u, .len = 0u };
 		};
 
 		size_t findBySize(uint32_t const size);

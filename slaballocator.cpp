@@ -38,22 +38,18 @@ namespace Gx {
 
     size_t BitmapObject::findBySize(uint32_t const size) {
         Context con;
-        con.currVal.val.allocated = true;
         size_t thisOffset = 0u;
-        while ((size < con.currVal.val.val || con.currVal.val.allocated) && con.pos < count()) {
+        do {
             thisOffset += con.currVal.val.val;
             con.prevVal = con.currVal;
-            con.currVal = decode(con.pos);
-            con.pos += con.currVal.len;
-        }
-        if (!con.currVal.val.allocated) {
-            con.found = true;
-        }
-        if (!con.found) {
+            con.currVal = decode(con.currVal.pos + con.currVal.len);
+        } while ((size > con.currVal.val.val || con.currVal.val.allocated) && con.currVal.pos < count());
+
+        if (con.currVal.len == 0u) {
             return 0u;
         }
 
-        con.nextVal = decode(con.pos);
+        con.nextVal = decode(con.currVal.pos + con.currVal.len);
         if (con.currVal.val.allocated || !con.prevVal.val.allocated ||
             (con.nextVal.len != 0u && !con.nextVal.val.allocated)) {
             __builtin_trap();
@@ -67,8 +63,8 @@ namespace Gx {
             mergedVal.allocated = false;
             mergedVal.val = con.currVal.val.val - size;
             ssize_t shiftLen = v.getLen(newVal.val) + v.getLen(mergedVal.val) - con.prevVal.len - con.currVal.len;
-            v.shift(shiftLen, con.pos - con.prevVal.len - con.currVal.len, count());
-            auto prevInsertPos = con.pos - con.prevVal.len - con.currVal.len;
+            v.shift(shiftLen, con.currVal.pos - con.prevVal.len, count());
+            auto prevInsertPos = con.currVal.pos - con.prevVal.len;
             size_t encLen = encode(newVal, prevInsertPos);
             encLen += encode(mergedVal, prevInsertPos + encLen);
             count(count() + encLen - con.prevVal.len - con.currVal.len);
@@ -79,8 +75,8 @@ namespace Gx {
             newVal.allocated = true;
             newVal.val = con.prevVal.val.val + con.currVal.val.val + con.nextVal.val.val;
             ssize_t shiftLen = v.getLen(newVal.val) - con.prevVal.len - con.currVal.len;
-            v.shift(shiftLen, con.pos - con.prevVal.len - con.currVal.len, count());
-            auto prevInsertPos = con.pos - con.prevVal.len - con.currVal.len;
+            v.shift(shiftLen, con.currVal.pos - con.prevVal.len - con.currVal.len, count());
+            auto prevInsertPos = con.currVal.pos - con.prevVal.len;
             size_t encLen = encode(newVal, prevInsertPos);
             count(count() + encLen - con.prevVal.len - con.currVal.len - con.nextVal.len);
             return thisOffset;
@@ -90,20 +86,18 @@ namespace Gx {
 
 
     bool BitmapObject::findByOffset(size_t const globalOffset, uint32_t const len) {
-        if (globalOffset < offset()) {
+        ssize_t const relativeOffset = globalOffset - offset();
+        if (relativeOffset < 0) {
             return false;
         }
         Context con;
-        con.found = true;
-        auto const relativeOffset = globalOffset - offset();
         auto cumulativeOffset = 0u;
-        while (relativeOffset >= cumulativeOffset && con.pos < count()) {
+        while (relativeOffset >= cumulativeOffset && con.currVal.pos < count()) {
             con.prevVal = con.currVal;
-            con.currVal = decode(con.pos);
+            con.currVal = decode(con.currVal.pos + con.currVal.len);
             cumulativeOffset += con.currVal.val.val;
-            con.pos += con.currVal.len;
         }
-        con.nextVal = decode(con.pos);
+        con.nextVal = decode(con.currVal.pos + con.currVal.len);
         ssize_t diff = cumulativeOffset - relativeOffset;
         if (cumulativeOffset - relativeOffset == con.currVal.val.val && len == con.currVal.val.val) {
             // Merge with prev and next
@@ -111,8 +105,8 @@ namespace Gx {
             mergedVal.allocated = false;
             mergedVal.val = con.prevVal.val.val + con.currVal.val.val + con.nextVal.val.val;
             ssize_t shiftLen = v.getLen(mergedVal.val) - con.prevVal.len - con.currVal.len - con.nextVal.len;
-            v.shift(shiftLen, con.pos - con.prevVal.len - con.currVal.len, count());
-            auto prevInsertPos = con.pos - con.prevVal.len - con.currVal.len;
+            v.shift(shiftLen, con.currVal.pos - con.prevVal.len - con.currVal.len, count());
+            auto prevInsertPos = con.currVal.pos - con.prevVal.len;
             size_t encLen = encode(mergedVal, prevInsertPos);
             count(count() + encLen - con.prevVal.len - con.currVal.len - con.nextVal.len);
             return true;
@@ -124,8 +118,8 @@ namespace Gx {
             newVal.allocated = true;
             newVal.val = con.currVal.val.val - len;
             ssize_t shiftLen = v.getLen(newVal.val) + v.getLen(prevVal.val) - con.prevVal.len - con.currVal.len;
-            v.shift(shiftLen, con.pos - con.prevVal.len - con.currVal.len, count());
-            auto prevInsertPos = con.pos - con.prevVal.len - con.currVal.len;
+            v.shift(shiftLen, con.currVal.pos - con.prevVal.len - con.currVal.len, count());
+            auto prevInsertPos = con.currVal.pos - con.prevVal.len;
             size_t encLen = encode(prevVal, prevInsertPos);
             encLen += encode(newVal, prevInsertPos + encLen);
             count(count() + encLen - con.prevVal.len - con.currVal.len);
@@ -138,7 +132,7 @@ namespace Gx {
             mergedNextVal.allocated = false;
             mergedNextVal.val = con.nextVal.val.val + len;
             ssize_t shiftLen = v.getLen(newVal.val) + v.getLen(mergedNextVal.val) - con.currVal.len - con.nextVal.len;
-            auto prevInsertPos = con.pos - con.currVal.len;
+            auto prevInsertPos = con.currVal.pos;
             v.shift(shiftLen, prevInsertPos, count());
             size_t encLen = encode(newVal, prevInsertPos);
             encLen += encode(mergedNextVal, prevInsertPos + encLen);
@@ -155,14 +149,12 @@ namespace Gx {
             nextVal.allocated = true;
             nextVal.val = cumulativeOffset - relativeOffset - len;
             ssize_t shiftLen = v.getLen(newVal.val) + v.getLen(prevVal.val) + v.getLen(nextVal.val) - con.currVal.len;
-            auto prevInsertPos = con.pos - con.currVal.len;
+            auto prevInsertPos = con.currVal.pos;
             v.shift(shiftLen, prevInsertPos, count());
             size_t encLen = encode(prevVal, prevInsertPos);
             encLen += encode(newVal, prevInsertPos + encLen);
             encLen += encode(nextVal, prevInsertPos + encLen);
             count(count() + encLen - con.currVal.len);
             return true;
-        }
-        return false;
-    }
+        }}
 }
