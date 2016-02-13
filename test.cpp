@@ -6,12 +6,11 @@
 #include "slaballocator.hpp"
 
 extern "C"
-void *memset(void *ptr, int len, Gx::size_t num) {
-    unsigned char *p = (unsigned char *) ptr;
-    while (len > 0) {
-        *p = num;
-        p++;
-        len--;
+void *memset(void *ptr, Gx::int32_t len, Gx::size_t val) {
+    Gx::size_t *p = static_cast<Gx::size_t*>(ptr);
+    Gx::ssize_t num = Gx::alignToBits(len, 3) / 8;
+    while (num-- > 0) {
+        *p++ = val;
     }
     return (ptr);
 }
@@ -42431,13 +42430,25 @@ struct Allocs {
         {
                 nullptr, 42u
         }
+}, allocsX[] {
+    {
+    nullptr, 32u
+    },
+    {
+    nullptr, 64u
+    },
+    {
+    nullptr, 32u
+    },
+    {
+    nullptr, 32u
+    }
 };
 
 template<size_t len>
 void odds(Allocs allocs[], void(*op)(Allocs &)) {
-    for (auto i = 1u; i < len / sizeof(allocs[0]); i = i + 2) {
+    for (size_t i = 1u; i < len / sizeof(allocs[0]); i = i + 2) {
         op(allocs[i]);
-        Bitmaps::allocator->dump();
     }
 }
 
@@ -42445,7 +42456,6 @@ template<size_t len>
 void evens(Allocs allocs[], void(*op)(Allocs &)) {
     for (auto i = 0u; i < len / sizeof(allocs[0]); i = i + 2) {
         op(allocs[i]);
-        Bitmaps::allocator->dump();
     }
 }
 
@@ -42453,9 +42463,9 @@ template<size_t len>
 void forward(Allocs allocs[], void(*op)(Allocs &)) {
     for (auto i = 0u; i < len / sizeof(allocs[0]); ++i) {
         op(allocs[i]);
-        Bitmaps::allocator->dump();
     }
 }
+
 
 extern "C"
 void _start(void) {
@@ -42466,19 +42476,51 @@ void _start(void) {
             __builtin_trap();
         }
         a.addr = Bitmaps::allocator->allocate(a.len);
-        memset(a.addr, a.len, 0xa5);
+        auto xx = (size_t*)a.addr;
+        Gx::ssize_t num = Gx::alignToBits(a.len, 4) / 8;
+
+        for(size_t i = 0; i < num; ++i) {
+            if(xx[i] != 0ULL) {
+                __builtin_trap();
+            }
+            xx[i] = (size_t)a.addr | a.len << 32;
+        }
+
     };
     auto deAllocate = [](decltype(allocs0[0]) &a) {
         if (a.addr == nullptr) {
             __builtin_trap();
         }
-        memset(a.addr, a.len, 0xc8);
+
+if((size_t)a.addr == 0x448f30) {
+        Gx::Bitmaps::allocator->dump();
+}
+
+        auto xx = (size_t*)a.addr;
+        Gx::ssize_t num = Gx::alignToBits(a.len, 4) / 8;
+        for(size_t i = 0; i < num; ++i) {
+            if(xx[i] != ((size_t)a.addr | a.len << 32)) {
+                __builtin_trap();
+            }
+            xx[i] = 0ULL;
+        }
         Bitmaps::allocator->deAllocate(a.addr, a.len);
         a.addr = nullptr;
     };
 
+
+//    forward<sizeof(allocsX)>(allocsX, allocate);
+//    deAllocate(allocsX[2]);
+//    Gx::Bitmaps::allocator->dump();
+
+
     forward<sizeof(allocs0)>(allocs0, allocate);
+    Gx::Bitmaps::allocator->dump();
     odds<sizeof(allocs0)>(allocs0, deAllocate);
+    Gx::Bitmaps::allocator->dump();
+    odds<sizeof(allocsX)>(allocsX, allocate);
+    Gx::Bitmaps::allocator->dump();
     evens<sizeof(allocs0)>(allocs0, deAllocate);
+    Gx::Bitmaps::allocator->dump();
     exit(0);
 }

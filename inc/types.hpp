@@ -30,7 +30,7 @@ namespace Gx {
 	template<> struct unsigned_size_t<4> { using type = uint32_t; };
 	template<> struct unsigned_size_t<8> { using type = uint64_t; };
 
-	using ssize_t = signed_size_t<sizeof 0>::type;
+	using ssize_t = signed_size_t<sizeof(size_t)>::type;
 
 	using intptr_t = signed_size_t<sizeof(void*)>::type;
 	using uintptr_t = unsigned_size_t<sizeof(void*)>::type;
