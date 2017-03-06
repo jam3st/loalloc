@@ -1,0 +1,12 @@
+#pragma once
+
+#include "types"
+
+namespace Gx {
+	namespace Bitops {
+
+		inline uint64_t getBits(size_t const val, size_t const start, size_t const end) {
+			return (val >> start) & ((1u << (end - start)) - 1u);
+		}
+	}
+}

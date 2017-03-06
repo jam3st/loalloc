@@ -1,14 +1,17 @@
 #pragma once
 
-#include "types.hpp"
-#include "bitops.hpp"
+#include "types"
+#include "bitops"
 
 namespace Gx {
 	constexpr size_t cacheLineSize = 64u;
 	constexpr size_t minPageBitSize = 12u;
 	constexpr size_t minPageFrameSize = 1u << minPageBitSize;
+	constexpr size_t minAlignmentBits = 2u;
 	constexpr size_t defaultAlignmentBits = 4u;
 	constexpr size_t defaultAlignmentBytes = 16u;
+
+	static_assert(defaultAlignmentBits >= minAlignmentBits, "");
 
 	template<size_t padLen>
 	struct PadIfNonZero {

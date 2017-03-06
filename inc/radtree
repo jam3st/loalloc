@@ -1,0 +1,80 @@
+#pragma once
+
+#include "types"
+
+namespace Gx {
+    template<typename T>
+    constexpr T sum(T v) {
+        return v;
+    }
+
+    template<typename T, typename... Args>
+    constexpr T sum(T first, Args... args) {
+        return first + sum(args...);
+    }
+
+    template<typename T, size_t numBits>
+    class Thash {
+    private:
+        class SingleVal {
+        public:
+            union {
+                uintptr_t address;
+                T val;
+                SingleVal* hash;
+            } addrVal;
+        };
+
+    public:
+        Thash() {
+            for(auto i = 0u; i < sizeof(first)/ sizeof(first[0]); ++i) {
+                first[i].addrVal.hash = nullptr;
+            }
+        }
+
+        T get(size_t const location) {
+            auto startPos = numBits - firstLenInBits;
+            auto endPos = numBits;
+            auto pointers = first;
+            for(;;) {
+                size_t index = Bitops::getBits(location, startPos, endPos);
+                if(pointers[index].addrVal.hash == nullptr) {
+                    return nullptr;
+                }
+                if(startPos == 0) {
+                    return pointers[index].addrVal.hash;
+                }
+
+
+                uintptr_t ptr = reinterpret_cast<uintptr_t>(first[index].addrVal.hash);
+                if((ptr & 1u) == 1u) {
+                    ptr &= ~1u;
+                    return reinterpret_cast<SingleVal*>(ptr)->addrVal.val;
+                }
+                endPos = startPos;
+                startPos -= bitsPerByte;
+                pointers = pointers[index].addrVal.hash;
+            }
+        }
+
+        void set(T const val, size_t const location) {
+            auto startPos = numBits - firstLenInBits;
+            auto endPos = numBits;
+            auto pointers = first;
+            auto shiftAmount = firstLenInBits;
+            for(;;) {
+            }
+        }
+
+        constexpr static size_t lenBits() {
+            return numBits;
+        }
+
+        constexpr static size_t firstLenInBits = numBits <= bitsPerByte ? numBits : numBits % bitsPerByte == 0u ? bitsPerByte : numBits % bitsPerByte;
+        constexpr static size_t maxLevel = numBits - firstLenInBits == 0 ? 1u : 1u + (numBits - firstLenInBits) / bitsPerByte;
+    private:
+
+        SingleVal first[1u << firstLenInBits];
+        static_assert(sizeof(T) <= sizeof(uintptr_t), "");
+    };
+}

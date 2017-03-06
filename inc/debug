@@ -1,6 +1,7 @@
 #pragma once
 
-#include "types.hpp"
+#include "types"
+#include "bitops"
 
 namespace Gx {
 
@@ -9,6 +10,7 @@ namespace Gx {
     class Debug {
     public:
         static constexpr bool enabled = true;
+        static constexpr bool zeroMem = false;
         static constexpr char const *const end = "\r\n";
 
         static Debug start() {
@@ -42,11 +44,11 @@ namespace Gx {
                 char d[32];
         };
 
-        static ss toString(uint64_t const val) {
+        static ss toString(size_t const val) {
             ss str{.d = {0}};
             size_t pos = 0;
-            for (ssize_t i = 63; i >= 0; i = i - 4) {
-                auto c = getBits(val, i - 3, i);
+            for (ssize_t i = sizeof(decltype(val)) * bitsPerByte; i > 0; i = i - 4) {
+                auto c = Bitops::getBits(val, i - 4, i);
                 if (c != 0 || pos != 0) {
                     str.d[pos++] = toPrintHex(c);
                 }
@@ -67,9 +69,6 @@ namespace Gx {
             }
         }
 
-        static uint64_t getBits(Gx::uint64_t const val, Gx::size_t const start, Gx::size_t const end) {
-            return (val >> start) & ((1u << (end - start + 1)) - 1);
-        }
     };
 
 }

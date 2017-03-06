@@ -1,7 +1,7 @@
 #pragma once
 
-#include "types.hpp"
-#include "atomics.hpp"
+#include "types"
+#include "atomics"
 namespace Gx {
 	class SpinIncrementLock16 final {
 	public:

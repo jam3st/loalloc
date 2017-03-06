@@ -1,14 +1,17 @@
 #pragma once
 
-#include "types.hpp"
+#include "types"
 #include "sysconfig.hpp"
-#include "spinlock.hpp"
-#include "debug.hpp"
+#include "spinlock"
+#include "debug"
+#include "radtree"
 
 namespace Gx {
-	constexpr size_t CHUNK_SIZE = 512u;
+	constexpr size_t alignmentBits = 4u;
+	constexpr size_t MALLOC_HEADER_SIZE = sizeof(uint32_t) + sizeof(uint32_t);
+	constexpr size_t CHUNK_SIZE = 1024u - MALLOC_HEADER_SIZE;
 	constexpr size_t REBALANCE_THRESHOLD = 18u; // approx 2 x worst case
-	constexpr size_t MALLOC_HEADER_SIZE = sizeof(size_t);
+
 
 	template<size_t size>
 	class VarInts final {
@@ -24,7 +27,7 @@ namespace Gx {
 		uint8_t get(size_t const pos) const {
 			return data[pos];
 		}
-		void set(size_t const pos, uint8_t const val) {
+		void set(uint8_t const val, size_t const pos) {
 			data[pos] = val;
 		}
 
@@ -45,7 +48,7 @@ namespace Gx {
 			}
 		}
 
-		static size_t getLen(uint32_t  const val) {
+		static size_t getLen(size_t const val) {
 			size_t ret = 1u;
 			auto tmp = val;
 			tmp >>= signBitPos;
@@ -53,6 +56,9 @@ namespace Gx {
 				++ret;
 				tmp >>= contBitPos;
 			}
+if(ret > 8) {
+	__builtin_trap();
+}
 			return ret;
 		}
 	private:
@@ -62,12 +68,12 @@ namespace Gx {
 	class BitmapObject final {
 	public:
 		struct BitmapVal {
-			uint32_t val: sizeof(uint32_t) * bitsPerByte - 1u;
+			size_t val: sizeof(size_t) * bitsPerByte - 1u;
 			bool allocated : 1;
 		};
 
 		struct  DecodedBitmapVal {
-			ssize_t pos = 0;
+			size_t pos = 0;
 			size_t len = 0u;
 			BitmapVal val;
 		};
@@ -92,7 +98,7 @@ namespace Gx {
 				currVal.len = 0u;
 				currVal.pos = count();
 				currVal.val.allocated = false;
-				currVal.val.val = 0u; // used for additions
+				currVal.val.val = 0u;
 				return currVal;
 			}
 			auto curPos = startPos;
@@ -119,22 +125,15 @@ namespace Gx {
 					((tmp & ~(v.firstPayloadBitMask)) == 0u ? 0u : v.contBitMask);
 			tmp >>= v.signBitPos;
 			auto nibIndex = insertPos;
-			v.set(nibIndex++, firstByte);
+			v.set(firstByte, nibIndex++);
 			while(tmp != 0u) {
-				v.set(nibIndex++, (tmp & v.payloadBitMask) | ((tmp & ~(v.payloadBitMask)) == 0u ? 0u : v.contBitMask));
+				v.set((tmp & v.payloadBitMask) | ((tmp & ~(v.payloadBitMask)) == 0u ? 0u : v.contBitMask), nibIndex++);
 				tmp >>= v.contBitPos;
 			}
 			return nibIndex - insertPos;
 		}
 
-		size_t trimLast(size_t const size, bool const allocated) {
-			auto lastVal = reverseDecode(count());
-			if(lastVal.val.allocated == allocated && lastVal.val.val >= size) {
-				count(count() - lastVal.len);
-				return lastVal.val.val;
-			}
-			return 0u;
-		}
+		size_t trimLast(size_t const size, bool const allocated);
 
 		BitmapObject* prev() const {
 			return header.prev;
@@ -157,15 +156,15 @@ namespace Gx {
             return header.firstOffset;
         }
 
-		void offset(size_t const offset) {
-			header.firstOffset = offset;
-		}
+		void offset(size_t const offset);// {
+//			header.firstOffset = offset;
+//		}
 
-		uint32_t largestFree() const {
+		size_t largestFree() const {
 			return header.largestFree;
 		}
 
-		void largestFree(uint32_t const largestFree) {
+		void largestFree(size_t const largestFree) {
 			header.largestFree = largestFree;
 		}
 
@@ -179,7 +178,7 @@ namespace Gx {
 		}
 
 		struct d { size_t a; size_t f; bool lastAlloc; bool inconsistent; };
-		d dump(bool prevAllocation);
+		d dump(bool prevAllocation, bool const lucid = false);
 
 		struct Context {
 			DecodedBitmapVal prevVal { .pos = 0u, .len = 0u };
@@ -187,56 +186,27 @@ namespace Gx {
 			DecodedBitmapVal nextVal { .pos = 0u, .len = 0u };
 		};
 
-		bool rebalance();
+		void rebalance();
 
-		size_t findBySize(uint32_t const size);
-		bool findByOffset(size_t const globalOffset, uint32_t const len);
+		BitmapVal findBySize(size_t const size);
 
-		bool remove(size_t const newOffset, uint32_t const len) {
-			return findByOffset(newOffset, len);
-		}
+		enum FindType {
+			NeverGoingToBeFound = -2,
+			FoundButNoSpace = -1,
+			NotFound = 0,
+			Found = 1
+		};
+		FindType findByOffset(size_t const globalOffset, size_t const len);
 
-		void append(size_t const size, bool const allocated) {
-			DecodedBitmapVal currVal;
-			size_t thisOffset = 0u;
-			size_t pos = 0u;
-			while(pos < count()) {
-				thisOffset += currVal.val.val;
-				currVal = decode(pos);
-				pos += currVal.len;
-			}
-			if((currVal.val.allocated && allocated) || (!currVal.val.allocated && !allocated)) {
-				BitmapVal newVal;
-				newVal.allocated = allocated;
-				newVal.val = currVal.val.val + size;
-				auto newLen = v.getLen(newVal.val);
-				ssize_t shift = newLen - currVal.len;
-				v.shift(shift, pos, count());
-				encode(newVal, pos - currVal.len);
-				count(count() + shift);
-			} else {
-				BitmapVal newVal;
-				newVal.allocated = allocated;
-				newVal.val = size;
-				// overflow
-				auto encLen = encode(newVal, pos);
-				count(count() + encLen);
-			}
-		}
-
-		size_t firstFit(uint32_t const size) {
-			return findBySize(size);
-		}
-
+		void append(size_t const size, bool const allocated);
 	private:
 
         class BitmapHeader final {
         public:
-			PadIfNonZero<MALLOC_HEADER_SIZE> mallocLegacyHeader;
             BitmapObject* next;
             BitmapObject* prev;
             size_t firstOffset;
-			uint32_t largestFree;
+			size_t largestFree;
             uint16_t pos;
 			SpinIncrementLock16 lock;
         };
@@ -256,9 +226,10 @@ namespace Gx {
 //            };
 //			uint8_t toReplace[CHUNK_SIZE - sizeof(ssize_t) - sizeof(size_t) - sizeof(BitmapObject*)];
 		};
-		ssize_t totalAlloc;
+		size_t totalAlloc;
 		size_t allocLength;
 		BitmapObject* spare;
+		BitmapObject* toDelete;
 		BitmapObjectJumpList jumpList;
 
         BitmapObject* getNearest(size_t const len) const {
@@ -273,23 +244,8 @@ namespace Gx {
 			return reinterpret_cast<BitmapObject*>(reinterpret_cast<size_t>(this) + sizeof(Bitmaps))->prev();
 		}
 
-		void initMaps(size_t const used, size_t const free) {
-			auto first = reinterpret_cast<BitmapObject*>(reinterpret_cast<size_t>(this) + sizeof(Bitmaps));
-			first->prev(first);
-			first->next(first);
-			first->prev()->append(used, true);
-			first->prev()->append(free, false);
-			totalAlloc += used;
-			allocLength += used + free;
-			spare = reinterpret_cast<BitmapObject*>(reinterpret_cast<size_t>(this) + sizeof(BitmapObject) + sizeof(Bitmaps));
-			auto xx = (size_t*)spare;
-			for(int i =0; i < sizeof(*spare)/sizeof(size_t); ++i) {
-				if(xx[i] != 0ULL) {
-					__builtin_trap();
-				}
-				xx[i] = (size_t)spare | (sizeof(*spare) << 32);
-			}
-		}
+		void initMaps(size_t const used, size_t const free);
+
 		BitmapObject* getSpare(){
 			if(spare == nullptr) { __builtin_trap(); }
 			auto ret = spare;
@@ -299,55 +255,91 @@ namespace Gx {
 		void extend(size_t const size);
 		void contract(size_t const size);
 		void allocateSpare() {
-			if(spare == nullptr) {
-Debug::start() + "*********************** ALLOC SPARE: " + Debug::end;
-				spare = reinterpret_cast<BitmapObject*>(allocate(sizeof(*spare), false));
-				auto xx = (size_t*)spare;
-				for(int i =0; i < sizeof(*spare)/sizeof(size_t); ++i) {
-					if(xx[i] != 0ULL) {
-						dump();
-						__builtin_trap();
+			if(toDelete != nullptr) {
+				if(spare == nullptr) {
+					spare = toDelete;
+					toDelete = nullptr;
+					return;
+				} else {
+					auto tmp = toDelete;
+					toDelete = nullptr;
+					if(Debug::zeroMem) {
+						// memclr
+						auto xx = (size_t *) spare;
+						for (auto i = 0u; i < sizeof(*tmp) / sizeof(size_t); ++i) {
+							xx[i] = 0ull;
+						}
 					}
-					xx[i] = (size_t)spare | sizeof(*spare) << 32;
+					deAllocate(tmp, sizeof(*toDelete));
 				}
-Debug::start() + "*********************** ALLOC DONE: " + Debug::end;
+			}
+			if(spare == nullptr) {
+				spare = reinterpret_cast<BitmapObject*>(allocate(sizeof(*spare), false));
+				if(Debug::zeroMem) {
+					auto xx = (size_t*)spare;
+					for(auto i =0u; i < sizeof(*spare)/sizeof(size_t); ++i) {
+						if(xx[i] != 0ull) {
+							dump();
+							__builtin_trap();
+						}
+					}
+				}
 			}
 		}
 	public:
-		void deAllocate(void* const what, uint32_t const size) {
+		void deAllocate(void* const what, size_t const size) {
 			if (size == 0u) { __builtin_trap(); }
-			auto allocSize = alignToBits(size, 4);
+			auto allocSize = alignToBits(size, alignmentBits);
 			size_t offset = reinterpret_cast<size_t>(what) - reinterpret_cast<size_t>(this);
 			for (auto curr = Bitmaps::allocator->first()->prev(); ; ) {
-				if(curr->remove(offset, allocSize)) {
+				auto status = curr->findByOffset(offset, allocSize);
+				if(status == BitmapObject::FoundButNoSpace) {
+					curr->rebalance();
+					if(curr != last()) {
+						curr = curr->next();
+					}
+					status = curr->findByOffset(offset, allocSize);
+				}
+				if(status == BitmapObject::NeverGoingToBeFound) {
+					break;
+				}
+				if(status == BitmapObject::Found) {
+					curr->rebalance();
 					totalAlloc -= allocSize;
-					if(first()->prev() == curr) {
+					if(last() == curr) {
 						auto trimSize = curr->trimLast(minPageFrameSize, false);
-						if(trimSize) {
-Debug::start() + "*********************** CONTRACT: " + trimSize + Debug::end;
+						if(trimSize > 0u) {
 							contract(trimSize);
 						}
 					}
-					if(totalAlloc < 0) { __builtin_trap(); }
+//					if(totalAlloc & 0x80000000000) { __builtin_trap(); }
 					break;
 				}
 				curr = curr->prev();
 				if (curr == Bitmaps::allocator->first()->prev()) {
 					Debug::start() + "*********************** deAllocate: " + Debug::end;
+					dump();
 					__builtin_trap();
 				}
 			}
 			allocateSpare();
 		}
 
-		void* allocate(uint32_t const size, bool const spare = true) {
+		void* allocate(size_t const size, bool const spare = true) {
 			if(size == 0u) { __builtin_trap(); }
-			auto allocSize = alignToBits(size, 4);
-			size_t found = 0u;
-			for(size_t maxTries = 0; found == 0u && maxTries < 2; ++maxTries) {
+			auto allocSize = alignToBits(size, alignmentBits);
+			BitmapObject::BitmapVal found;
+			found.allocated = false;
+			found.val = 0u;
+			for(size_t maxTries = 0; !found.allocated && maxTries < 2; ++maxTries) {
 				for (auto *bitmap = first(); ; ) {
-					found = bitmap->firstFit(allocSize);
-					if (found != 0u) {
+					found = bitmap->findBySize(allocSize);
+					if(!found.allocated && found.val != 0u) {
+						bitmap->rebalance();
+						found = bitmap->findBySize(allocSize);
+					}
+					if (found.allocated) {
+						bitmap->rebalance();
 						totalAlloc += allocSize;
 						if (totalAlloc > allocLength) { __builtin_trap(); }
 						break;
@@ -357,19 +349,17 @@ Debug::start() + "*********************** CONTRACT: " + trimSize + Debug::end;
 						break;
 					}
 				}
-				if(found == 0u && maxTries == 0u) {
+				if(!found.allocated && maxTries == 0u) {
 					extend(size);
-					Debug::start() + "*********************** EXTENDED:" + size + Debug::end;
 				}
 				if(spare) {
 					allocateSpare();
 				}
-
 			}
-			return reinterpret_cast<void*>(found + reinterpret_cast<size_t>(this));
+			return reinterpret_cast<void*>(found.val + reinterpret_cast<size_t>(this));
 		}
 
-		void dump() {
+		void dump(bool const forcePrint = false) {
 			BitmapObject::d sums;
 			bool inconsistent = false;
 			sums.a = sums.f = 0u;
@@ -379,11 +369,16 @@ Debug::start() + "*********************** CONTRACT: " + trimSize + Debug::end;
 
 			for(auto* bitmap = first(); ; ) {
 				auto const sum = sums.a + sums.f;
-				if(sum != bitmap->offset()) { inconsistent = true;  Debug::start() + "Summed 0x" + sum + " Offset is 0x" + bitmap->offset() + Debug::end; }
-				auto tmp = bitmap->dump(prevAllocation);
+				if(sum != bitmap->offset()) {
+					inconsistent = true;
+					Debug::start() + "XXXXXXXXXXX OFFSET Summed 0x" + sum + " Offset is 0x" + bitmap->offset() + Debug::end;
+				}
+				auto tmp = bitmap->dump(prevAllocation, forcePrint || false);
 				sums.a += tmp.a;
 				sums.f += tmp.f;
-				if(!inconsistent && sums.inconsistent) { inconsistent = true; }
+				if(!inconsistent && sums.inconsistent) {
+					inconsistent = true;
+				}
 				prevAllocation = sums.lastAlloc;
 				bitmap = bitmap->next();
 				if(bitmap == first()) {
@@ -391,7 +386,10 @@ Debug::start() + "*********************** CONTRACT: " + trimSize + Debug::end;
 				}
 			}
 			auto cum = sums.a + sums.f;
-			Debug::start() + "Alloc len is " + allocLength + " vs summed " + cum + " and useds is " + totalAlloc + " vs summs " + sums.a + Debug::end;
+			if(inconsistent || sums.a + sums.f != allocLength || sums.a != totalAlloc) {
+				Debug::start() + "Alloc len is " + allocLength + " vs summed " + cum + " and useds is " + totalAlloc +
+				" vs summs " + sums.a + Debug::end;
+			}
 			if(sums.a + sums.f != allocLength) { __builtin_trap(); }
 			if(sums.a != totalAlloc)  { __builtin_trap(); }
 			if(inconsistent)  { __builtin_trap(); }
